@@ -10,9 +10,9 @@ from github import Github, UnknownObjectException, NamedUser
 
 def extract_reviewers(pull_request, extract_weight):
     sources = [
-        set([rev.user for rev in pull_request.get_reviews() if rev.state in ['APPROVED', 'REQUEST_CHANGES']]),
-        set([rev for rev in pull_request.get_review_requests()[0] if isinstance(rev, NamedUser.NamedUser)]),
-        set([rev for rev in pull_request.get_review_requests()[1] if isinstance(rev, NamedUser.NamedUser)])
+        set([rev.user for rev in pull_request.get_reviews()]),
+        set([rev.user for rev in pull_request.get_issue_comments()]),
+        set([rev.user for rev in pull_request.get_review_comments()])
     ]
     points = extract_weight(pull_request)
     return {user: points for user in reduce(set.union, sources)}
@@ -67,7 +67,7 @@ def cli(token):
 
 
 @cli.command()
-@click.argument('name')
+@click.argument('names')
 @click.option('--weight-method', '-w', default='changes',
               type=click.Choice(['simple', 'changes']),
               help='Select method of calculating weights of pull requests.')
@@ -76,38 +76,40 @@ def cli(token):
 @click.option('--younger-than', '-y', 'younger_than',
               help='Take into account only pull requests younger than.',
               type=click.Choice(['week', 'month', 'year', 'all']), default='month')
-def show(name, label_list, state, weight_method, younger_than):
+def show(names, label_list, state, weight_method, younger_than):
     """Display reviewers stats for given repository"""
     g = Github(cli.token)
 
-    try:
-        pull_requests = g.get_repo(name).get_pulls(state)
-    except UnknownObjectException:
-        raise click.ClickException('Repository not found!')
+    names_list = names.split(":")
+    for name in names_list:
+        try:
+            pull_requests = g.get_repo(name).get_pulls(state)
+        except UnknownObjectException:
+            raise click.ClickException('Repository not found!')
 
-    # filter by creation date
-    pull_requests = [request for request in pull_requests if time_condition(request, younger_than)]
-    pull_requests_length = len(pull_requests)
-
-    review_counter = Counter()
-    creator_counter = Counter()
-
-    if weight_method == 'simple':
-        extract_weight = extract_simple
-    else:
-        extract_weight = extract_complex
-
-    if label_list:
-        label_set = set(label_list)
-        pull_requests = [p for p in pull_requests if
-                         label_set <= set(l.name for l in p.labels)]
+        # filter by creation date
+        pull_requests = [request for request in pull_requests if time_condition(request, younger_than)]
         pull_requests_length = len(pull_requests)
 
-    with click.progressbar(pull_requests, length=pull_requests_length,
-                           show_eta=False, label='Processing Pull Requests') as pull_requests_bar:
-        for pull in pull_requests_bar:
-            review_counter.update(extract_reviewers(pull, extract_weight))
-            creator_counter.update({pull.user: extract_weight(pull)})
+        review_counter = Counter()
+        creator_counter = Counter()
+
+        if weight_method == 'simple':
+            extract_weight = extract_simple
+        else:
+            extract_weight = extract_complex
+
+        if label_list:
+            label_set = set(label_list)
+            pull_requests = [p for p in pull_requests if
+                             label_set <= set(l.name for l in p.labels)]
+            pull_requests_length = len(pull_requests)
+
+        with click.progressbar(pull_requests, length=pull_requests_length,
+                               show_eta=False, label='Processing Pull Requests in ' + name) as pull_requests_bar:
+            for pull in pull_requests_bar:
+                review_counter.update(extract_reviewers(pull, extract_weight))
+                creator_counter.update({pull.user: extract_weight(pull)})
     display_user_counter(review_counter, 'Reviewers ranking:')
     display_user_counter(creator_counter, 'Creators ranking:')
 
